@@ -7386,8 +7386,21 @@ iwx_power_build_cmd(struct iwx_softc *sc, struct iwx_node *in,
     keep_alive = roundup(keep_alive, 1000) / 1000;
     cmd->keep_alive_seconds = htole16(keep_alive);
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd->flags = htole16(IWX_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /*
+     * Firmware power save is deliberately left DISABLED (flags stays 0).
+     *
+     * With IWX_POWER_FLAGS_POWER_SAVE_ENA_MSK set the firmware naps between
+     * DTIM beacons and the AP buffers downlink frames, so sparse traffic
+     * (HTTP request/response, DNS, TLS setup) pays a wake-up penalty of
+     * hundreds of ms to several seconds. Bulk transfers keep the radio
+     * awake and run at full speed, which is what makes a perfectly
+     * associated link feel dead for browsing while speed tests look fine.
+     *
+     * AirportItlwm never implements setPOWERSAVE() and getPOWERSAVE()
+     * always reports DISABLED, so macOS cannot switch this off from
+     * userspace. Disable it here instead.
+     */
+    (void)ic;
 }
 
 int ItlIwx::
@@ -7418,8 +7431,12 @@ iwx_power_update_device(struct iwx_softc *sc)
     struct iwx_device_power_cmd cmd = { };
     struct ieee80211com *ic = &sc->sc_ic;
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd.flags = htole16(IWX_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /*
+     * Keep the device-level power save flag clear too - see the comment in
+     * iwx_power_build_cmd() above. Setting it here would re-arm firmware PS
+     * at the device level even when the per-MAC table has it off.
+     */
+    (void)ic;
     
     return iwx_send_cmd_pdu(sc,
                             IWX_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);

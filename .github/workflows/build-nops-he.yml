@@ -1,0 +1,113 @@
+name: Build Sonoma14.4 no-powersave + HE (2.4.0)
+
+on:
+  push:
+    branches: ['nops-he-2.4.0']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-nops-he-2.4.0
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install MacKernelSDK
+        uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 3f750085caa17ec3a7880f11c11bf4f48cd6a164
+          path: MacKernelSDK
+
+      - name: Verify patch state
+        run: |
+          set -euo pipefail
+
+          echo "--- power-save flag assignments (must be none) ---"
+          if grep -nE 'flags[[:space:]]*=[[:space:]]*htole16\((IWM|IWX)_(DEVICE_)?POWER_FLAGS_POWER_SAVE_ENA_MSK\)' \
+               itlwm/hal_iwm/power.cpp itlwm/hal_iwx/ItlIwx.cpp; then
+            echo "ERROR: firmware power save still enabled"
+            exit 1
+          fi
+          echo "OK: no power-save assignments"
+
+          echo "--- HE boot-arg present outside AIRPORT_WCL (must be visible) ---"
+          if grep -n "itlwm_he" AirportItlwm/AirportItlwmV2.cpp; then
+            echo "OK: HE opt-in boot-arg exposed"
+          else
+            echo "ERROR: itlwm_he boot-arg missing"
+            exit 1
+          fi
+
+      - name: Build AirportItlwm-Sonoma14.4
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          set +e
+          xcodebuild -project itlwm.xcodeproj \
+            -target "AirportItlwm-Sonoma14.4" \
+            -configuration Release -jobs 3 ARCHS=x86_64 \
+            SYMROOT="$PWD/build/products" OBJROOT="$PWD/build/obj" \
+            CODE_SIGNING_ALLOWED=NO \
+            GIT_COMMIT="_$(git rev-parse --short HEAD)" \
+            build > logs/build.log 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "BUILD FAILED ($rc) -- last 150 lines:"
+            tail -150 logs/build.log
+            exit "$rc"
+          fi
+          echo "BUILD OK"
+          tail -8 logs/build.log
+
+      - name: Package kext
+        run: |
+          set -euo pipefail
+          KEXT=$(find build -type d -name "AirportItlwm.kext" | head -1)
+          if [ -z "$KEXT" ]; then
+            echo "kext not found; tree:"
+            find build -maxdepth 6 -name "*.kext" | head -20
+            exit 1
+          fi
+          echo "Found: $KEXT"
+          echo "  version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$KEXT/Contents/Info.plist" 2>/dev/null)"
+          echo "  size:    $(stat -f%z "$KEXT/Contents/MacOS/AirportItlwm")"
+          mkdir -p out
+          ditto -c -k --keepParent "$KEXT" out/AirportItlwm-Sonoma14.4-nops-he.zip
+          ls -lh out/
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirportItlwm-Sonoma14.4-nops-he
+          path: out/*.zip
+          retention-days: 30
+
+      - name: Publish back to branch
+        if: always()
+        run: |
+          set -e
+          mkdir -p artifacts
+          cp logs/build.log artifacts/build.log 2>/dev/null || true
+          [ -f out/AirportItlwm-Sonoma14.4-nops-he.zip ] && cp out/AirportItlwm-Sonoma14.4-nops-he.zip artifacts/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/ 2>/dev/null || true
+          if git diff --cached --quiet 2>/dev/null; then
+            echo "nothing to publish"
+          else
+            git commit -m "ci: no-powersave + HE build result [skip ci]"
+            git push origin HEAD:nops-he-2.4.0
+          fi

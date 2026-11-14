@@ -181,8 +181,14 @@ iwm_power_build_cmd(struct iwm_softc *sc, struct iwm_node *in,
     keep_alive = roundup(keep_alive, 1000) / 1000;
     cmd->keep_alive_seconds = htole16(keep_alive);
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd->flags = htole16(IWM_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /*
+     * Firmware power save is deliberately left DISABLED (flags stays 0).
+     * See the long comment in hal_iwx/ItlIwx.cpp iwx_power_build_cmd():
+     * PS makes the radio nap between DTIM beacons, which turns sparse
+     * traffic into 0.5-4s wake-up stalls while bulk transfers stay fast.
+     * macOS cannot disable it (setPOWERSAVE is unimplemented), so do it here.
+     */
+    (void)ic;
 }
 
 int ItlIwm::
@@ -213,8 +219,8 @@ iwm_power_update_device(struct iwm_softc *sc)
     struct iwm_device_power_cmd cmd = { };
     struct ieee80211com *ic = &sc->sc_ic;
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd.flags = htole16(IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /* Device-level power save flag stays clear as well. */
+    (void)ic;
     
     return iwm_send_cmd_pdu(sc,
                             IWM_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);
