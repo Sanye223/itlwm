@@ -181,8 +181,22 @@ iwm_power_build_cmd(struct iwm_softc *sc, struct iwm_node *in,
     keep_alive = roundup(keep_alive, 1000) / 1000;
     cmd->keep_alive_seconds = htole16(keep_alive);
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd->flags = htole16(IWM_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /*
+     * Firmware power save is deliberately left DISABLED (flags stays 0).
+     *
+     * With IWM_POWER_FLAGS_POWER_SAVE_ENA_MSK set, the firmware puts the
+     * radio to sleep between DTIM beacons and the AP buffers downlink
+     * frames. Sparse traffic (HTTP request/response, DNS, TLS setup) then
+     * pays a wake-up penalty of hundreds of ms to several seconds, while
+     * bulk transfers keep the radio awake and reach full speed. That
+     * asymmetry is what makes web pages feel "disconnected" on an
+     * otherwise perfectly associated link.
+     *
+     * AirportItlwm never implements setPOWERSAVE(), and getPOWERSAVE()
+     * always reports DISABLED, so there is no way for macOS to switch
+     * this off from userspace. Disable it here instead.
+     */
+    (void)ic;
 }
 
 int ItlIwm::
@@ -213,8 +227,12 @@ iwm_power_update_device(struct iwm_softc *sc)
     struct iwm_device_power_cmd cmd = { };
     struct ieee80211com *ic = &sc->sc_ic;
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
-        cmd.flags = htole16(IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+    /*
+     * Keep the device power save flag clear as well - see the comment in
+     * iwm_power_build_cmd() above. Setting it here would re-arm firmware
+     * PS at the device level even when the per-MAC table has it off.
+     */
+    (void)ic;
     
     return iwm_send_cmd_pdu(sc,
                             IWM_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);
